@@ -1,17 +1,28 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from core.domain.user import User
+from core.domain.enums import SegmentType
 from core.rules.business_rules import RuleResult
 
 class SharedContext(BaseModel):
     """Shared context that all agents can access and modify"""
-    user: User = Field(description="User being analyzed")
+    # User-based fields (kept for compatibility; may be None in segment-batch mode)
+    user: Optional[User] = Field(default=None, description="User being analyzed")
     business_rules: List[RuleResult] = Field(description="Applied business rules")
+    
+    # Segment-based batch fields
+    segment_type: Optional[SegmentType] = Field(default=None, description="Segment for batch processing")
+    user_count: Optional[int] = Field(default=None, description="Number of users in this segment batch")
+
+    # Legacy Q-learning fields (will be unused in segment mode, kept for compatibility)
     q_learning_suggestion: Optional[int] = Field(None, description="Q-Learning's recommended discount percentage")
     q_value: Optional[float] = Field(None, description="Q-Learning's confidence score")
+    
+    # Agent proposals
     profitability_proposal: Optional[Dict] = Field(None, description="Profitability agent's proposal")
     conversion_proposal: Optional[Dict] = Field(None, description="Conversion agent's proposal")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional context data")
+    processing_mode: str = Field(default="single_user", description="single_user or segment_level")
     
     def add_agent_proposal(self, agent_name: str, proposal: Dict) -> None:
         """Add proposal from specific agent"""

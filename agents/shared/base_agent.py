@@ -3,6 +3,7 @@ from typing import Dict, Any
 from agno.agent import Agent
 from agno.models.anthropic import Claude
 from agno.tools.reasoning import ReasoningTools
+import os
 from .context import SharedContext
 from .message import AgentMessage
 
@@ -11,27 +12,29 @@ class BaseVoyagerAgent(ABC):
     
     def __init__(self, 
                  name: str, 
-                 model: str = "claude-sonnet-4-5-20250929", 
+                 model: str = "claude-3-5-sonnet-20241022", 
                  temperature: float = 0.7):
         """
         Initialize base agent with Agno integration
         
         Args:
             name: Agent name for identification
-            model: LLM model to use
+            model: LLM model ID to use (e.g. 'claude-3-5-sonnet-20241022')
             temperature: Temperature for LLM responses
         """
         self.name = name
         self.model = model
         self.temperature = temperature
         
-        # Create Agno Agent instance with proper model and tools
-        self.agent = Agent(
-            name=name,
-            model=Claude(model=model, temperature=temperature),
-            tools=[ReasoningTools()],
-            instructions=self._setup_instructions()
-        )
+        # Lazily create Agno Agent only if explicitly enabled
+        self.agent = None
+        if os.getenv("ENABLE_LLM_AGENTS", "false").lower() in ("1", "true", "yes"): 
+            self.agent = Agent(
+                name=name,
+                model=Claude(id=model, temperature=temperature),
+                tools=[ReasoningTools()],
+                instructions=self._setup_instructions()
+            )
     
     @abstractmethod
     def _setup_instructions(self) -> str:
@@ -42,35 +45,11 @@ class BaseVoyagerAgent(ABC):
     def make_proposal(self, context: SharedContext) -> Dict[str, Any]:
         """
         Make proposal based on shared context
-        
-        Args:
-            context: Shared context with user data and other agent proposals
-            
-        Returns:
-            Proposal dictionary with:
-            - discount: int (recommended discount percentage)
-            - reasoning: list[str] (explanation of decision)
-            - confidence: float (0-1, confidence in recommendation)
-            - expected_conversion: float (predicted conversion rate)
-            - expected_profit: float (predicted profit in TL)
         """
         pass
     
-    def send_message(self, 
-                    recipient: str, 
-                    message_type: str, 
-                    content: Dict[str, Any]) -> AgentMessage:
-        """
-        Create and return a message to another agent
-        
-        Args:
-            recipient: Target agent name (None for broadcast)
-            message_type: Type of message (proposal, feedback, decision, query)
-            content: Message payload
-            
-        Returns:
-            AgentMessage instance
-        """
+    def send_message(self, recipient: str, message_type: str, content: Dict[str, Any]) -> AgentMessage:
+        """Create and return a message to another agent"""
         return AgentMessage(
             sender=self.name,
             recipient=recipient,
@@ -79,5 +58,4 @@ class BaseVoyagerAgent(ABC):
         )
     
     def __repr__(self) -> str:
-        """String representation for debugging"""
         return f"{self.__class__.__name__}(name='{self.name}', model='{self.model}')"

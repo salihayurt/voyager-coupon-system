@@ -5,7 +5,7 @@ from .enums import DomainType, ActionType
 
 class CouponDecision(BaseModel):
     """Agent'ların verdiği kupon kararı"""
-    user_id: str
+    user_id: int  # Changed from str to int to match User model
     action_type: ActionType
     discount_percentage: Optional[int] = Field(None, ge=5, le=20, description="İndirim oranı")
     target_domain: Optional[DomainType] = Field(None, description="Hangi domain için kupon")
@@ -26,7 +26,7 @@ class CouponDecision(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "user_id": "USR_12345",
+                "user_id": 12345,  # Changed from "USR_12345" to 12345
                 "action_type": "offer_discount",
                 "discount_percentage": 12,
                 "target_domain": "ENUYGUN_HOTEL",

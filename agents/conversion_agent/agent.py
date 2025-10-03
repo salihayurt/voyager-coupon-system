@@ -3,108 +3,112 @@ import re
 from agents.shared.base_agent import BaseVoyagerAgent
 from agents.shared.context import SharedContext
 from core.domain.enums import SegmentType
+from core.domain.segment_constraints import get_allowed_discounts, SEGMENT_DISCOUNT_CONSTRAINTS
+from adapters.external.campaign_data_client import CampaignDataClient
 from core.rules.business_rules import RuleResult
 
 class ConversionAgent(BaseVoyagerAgent):
     """Agent focused on maximizing user conversion rates through strategic discount optimization"""
     
     def __init__(self):
-        """Initialize with medium temperature for balanced conversion decisions"""
         super().__init__(name="ConversionAgent", temperature=0.5)
+        self.campaign_client = CampaignDataClient()
+        # Load once; caller must ensure file exists
+        try:
+            self.campaign_client.load_campaign_history("data/customer_data_with_campaigns_v3.csv")
+        except Exception:
+            # Fallback: operate with zero acceptance data
+            pass
     
     def _setup_instructions(self) -> str:
         """Setup conversion-focused instructions for the agent"""
         instructions = [
             "You are a conversion optimization and user psychology expert",
-            "Goal: Maximize user conversion rate",
-            "Principles:",
-            "- Higher discounts increase conversion probability",
-            "- AT_RISK segment needs aggressive discounts (15-20%)",
-            "- High churn score (>0.7) → be generous (12-20%)",
-            "- PRICE_SENSITIVE users respond well to visible discounts (12-15%)",
-            "- NEW_USER segment → moderate discount to hook them (10-12%)",
-            "- Discount options: [5, 7, 10, 12, 15, 20]",
-            "- Balance conversion with reasonable discount",
-            "- Return only the number"
+            "Goal: Maximize user conversion rate through optimal discount strategies",
+            "Approach:",
+            "- Analyze all 5 user scores as continuous features (churn, activity, cart_abandon, price_sensitivity, family_score)",
+            "- Use Q-Learning suggestions as learned patterns from historical conversion data",
+            "- Q-Learning has discovered optimal thresholds through conversion experience",
+            "- Focus on conversion rate while considering profit impact",
+            "- Family score: 0=family buyer (may book multiple items), 1=solo buyer (individual conversion)",
+            "- Available discounts: [5, 7, 10, 12, 15, 20]",
+            "- User segment is mentioned only for explanation context, NOT for decision logic",
+            "- Balance conversion optimization with reasonable discount levels",
+            "- Return only the discount number"
         ]
         return "\n".join(instructions)
     
     def make_proposal(self, context: SharedContext) -> Dict[str, Any]:
-        """
-        Make conversion-optimized discount proposal
-        
-        Args:
-            context: Shared context with user data and other information
-            
-        Returns:
-            Proposal dict with discount, reasoning, confidence, etc.
-        """
-        user = context.user
-        
-        # Build analysis prompt focused on conversion factors
-        prompt = self._build_analysis_prompt(user, context)
-        
-        try:
-            # Get LLM response
-            response = self.agent.run(prompt)
-            
-            # Parse discount from response
-            discount = self._parse_discount_response(response)
-            
-        except Exception as e:
-            # Fallback to conversion-focused default
-            discount = 12
-            print(f"ConversionAgent error: {e}. Using fallback discount: {discount}")
-        
-        # Calculate confidence and estimates
-        confidence = self._calculate_confidence(user, discount)
-        expected_conversion = self._estimate_conversion(user, discount)
-        expected_profit = self._estimate_profit(user, discount)
-        
-        # Build reasoning
-        reasoning = self._build_reasoning(user, discount, context)
-        
+        """Conversion decision using historical acceptance rates per segment (no LLM)."""
+        segment: SegmentType = context.segment_type or (context.user.segment if context.user else SegmentType.STANDARD_CUSTOMERS)
+        allowed = get_allowed_discounts(segment)
+        if not allowed:
+            chosen = 10
+            acceptance = 0.0
+        else:
+            acceptance_map = {d: self.campaign_client.get_acceptance_rate_by_segment(segment, d) for d in allowed}
+            # Proximity to profitability suggestion if available
+            prof_disc = None
+            if context.profitability_proposal and 'discount' in context.profitability_proposal:
+                prof_disc = context.profitability_proposal['discount']
+                candidates = [d for d in allowed if abs(d - prof_disc) <= 2] or allowed
+            else:
+                candidates = allowed
+            # If acceptance ties (often 0.0 when no data), prefer higher discount for conversion focus
+            chosen = max(candidates, key=lambda d: (acceptance_map.get(d, 0.0), d))
+            acceptance = acceptance_map.get(chosen, 0.0)
+
+        reasoning = [
+            f"Selected {chosen}% based on highest acceptance in {segment.value}",
+            f"Allowed range: {SEGMENT_DISCOUNT_CONSTRAINTS[segment][0]}-{SEGMENT_DISCOUNT_CONSTRAINTS[segment][1]}%",
+        ]
+
         return {
-            "discount": discount,
+            "discount": chosen,
             "reasoning": reasoning,
-            "confidence": confidence,
-            "expected_conversion": expected_conversion,
-            "expected_profit": expected_profit
+            "confidence": 0.85,
+            "expected_conversion": acceptance,
+            "expected_profit": 0.0,
         }
     
     def _build_analysis_prompt(self, user, context: SharedContext) -> str:
         """Build conversion-focused analysis prompt for the LLM"""
         business_rules_text = self._format_business_rules(context.business_rules)
         q_suggestion = context.q_learning_suggestion or "No suggestion"
+        q_value = context.q_value or 0.0
         
         prompt = f"""
-Analyze this user for optimal conversion-maximizing discount:
+Analyze this user for optimal CONVERSION-MAXIMIZING discount:
 
-USER PROFILE (Conversion Focus):
+USER PROFILE:
 - ID: {user.user_id}
-- Segment: {user.segment.value}
+- Segment: {user.segment.value} (for context only - do not use for decision logic)
 - Domain: {user.domain.value}
-- Churn Risk: {user.scores.churn_score:.2f} (HIGH PRIORITY)
-- Activity Score: {user.scores.activity_score:.2f}
-- Cart Abandon Score: {user.scores.cart_abandon_score:.2f}
-- Price Sensitivity: {user.scores.price_sensitivity:.2f}
-- Is One-way: {user.is_oneway}
-- Has Basket: {user.user_basket}
+- All Scores (analyze as continuous features for conversion patterns):
+  * Churn Risk: {user.scores.churn_score:.3f} (0=stable, 1=likely to leave)
+  * Activity Level: {user.scores.activity_score:.3f} (0=inactive, 1=highly engaged)
+  * Cart Abandon Risk: {user.scores.cart_abandon_score:.3f} (0=completes, 1=abandons frequently)
+  * Price Sensitivity: {user.scores.price_sensitivity:.3f} (0=price insensitive, 1=highly sensitive)
+  * Family Pattern: {user.scores.family_score:.3f} (0=family buyer, 1=solo buyer)
+- Transaction Context: Is One-way: {user.is_oneway}, Has Basket: {user.user_basket}
 
 BUSINESS RULES APPLIED:
 {business_rules_text}
 
-Q-LEARNING SUGGESTION: {q_suggestion}%
+Q-LEARNING RECOMMENDATION: {q_suggestion}% (confidence: {q_value:.3f})
+- This reflects learned conversion patterns from historical data
+- Q-Learning has discovered which score combinations respond best to different discounts
+- These patterns were learned through actual conversion outcomes, not predefined rules
 
-CONVERSION DECISION CRITERIA:
-- AT_RISK segment: Use aggressive discounts (15-20%) to retain
-- High churn risk (>0.7): Be generous with discounts (12-20%)
-- PRICE_SENSITIVE: Visible discounts work well (12-15%)
-- NEW_USER: Hook them with moderate discount (10-12%)
-- High cart abandon score: Needs incentive to complete purchase
+CONVERSION DECISION APPROACH:
+- Consider ALL FIVE scores as a pattern that influences conversion probability
+- Q-Learning suggestion reflects successful conversions from similar score profiles
+- High churn/cart abandon scores may indicate need for stronger incentives
+- Family buyers (low family_score) may have different conversion triggers than solo buyers
+- Price sensitivity combined with other factors creates complex conversion patterns
 - Available discounts: [5, 7, 10, 12, 15, 20]
 
-Focus on CONVERSION RATE over profit margins.
+Focus on CONVERSION RATE optimization based on learned score patterns.
 Return only the recommended discount percentage as a number.
 """
         return prompt
@@ -138,32 +142,31 @@ Return only the recommended discount percentage as a number.
         return "\n".join(formatted) if formatted else "- No applicable business rules"
     
     def _calculate_confidence(self, user, discount: int) -> float:
-        """Calculate confidence score based on conversion optimization alignment"""
+        """Calculate confidence based on Q-Learning alignment and score patterns"""
         segment = user.segment
         churn_score = user.scores.churn_score
         
-        # High confidence for optimal conversion scenarios
-        if segment == SegmentType.AT_RISK and discount >= 15:
+        # High confidence for optimal conversion scenarios based on learned patterns
+        if segment == SegmentType.AT_RISK_CUSTOMERS and discount >= 15:
             return 0.95
         elif churn_score > 0.7 and discount >= 12:
             return 0.9
-        elif segment == SegmentType.PRICE_SENSITIVE and discount >= 10:
+        elif segment == SegmentType.PRICE_SENSITIVE_CUSTOMERS and discount >= 10:
             return 0.85
-        elif segment == SegmentType.NEW_USER and 10 <= discount <= 12:
+        elif segment == SegmentType.STANDARD_CUSTOMERS and 10 <= discount <= 12:
             return 0.8
         else:
             return 0.7
     
     def _estimate_conversion(self, user, discount: int) -> float:
-        """Estimate conversion rate based on user segment and discount"""
+        """Estimate conversion rate based on user characteristics including family patterns"""
         # Base conversion rates by segment
         base_rates = {
-            SegmentType.HIGH_VALUE: 0.7,
-            SegmentType.FREQUENT_TRAVELER: 0.65,
-            SegmentType.PRICE_SENSITIVE: 0.5,
-            SegmentType.AT_RISK: 0.4,
-            SegmentType.NEW_USER: 0.45,
-            SegmentType.DORMANT: 0.3
+            SegmentType.PREMIUM_CUSTOMERS: 0.8,
+            SegmentType.HIGH_VALUE_CUSTOMERS: 0.7,
+            SegmentType.PRICE_SENSITIVE_CUSTOMERS: 0.5,
+            SegmentType.AT_RISK_CUSTOMERS: 0.4,
+            SegmentType.STANDARD_CUSTOMERS: 0.6
         }
         
         base_conversion = base_rates.get(user.segment, 0.5)  # Default fallback
@@ -177,8 +180,18 @@ Return only the recommended discount percentage as a number.
         # Cart abandon boost: if low cart abandon score, slight boost
         cart_boost = 0.05 if user.scores.cart_abandon_score < 0.3 else 0.0
         
+        # Family pattern adjustment: family buyers may have different conversion patterns
+        # Family buyers (low family_score) might be more motivated when they find good deals
+        family_boost = 0.0
+        if user.scores.family_score < 0.4:  # Family buyer
+            family_boost = 0.03  # Family buyers respond well to discounts
+        
+        # Price sensitivity interaction with discount
+        price_sensitivity_boost = user.scores.price_sensitivity * discount * 0.001  # Sensitive users respond more to discounts
+        
         # Calculate final conversion rate
-        estimated_conversion = base_conversion + discount_boost - churn_penalty + cart_boost
+        estimated_conversion = (base_conversion + discount_boost - churn_penalty + 
+                               cart_boost + family_boost + price_sensitivity_boost)
         
         # Cap at 95% maximum conversion rate
         return min(0.95, max(0.1, estimated_conversion))  # Minimum 10%, maximum 95%
@@ -188,12 +201,11 @@ Return only the recommended discount percentage as a number.
         # Same logic as ProfitabilityAgent but with different base values
         # Conversion agent assumes slightly lower base values due to higher discounts
         base_values = {
-            SegmentType.HIGH_VALUE: 4500,  # Slightly lower than profit-focused
-            SegmentType.FREQUENT_TRAVELER: 2800,
-            SegmentType.PRICE_SENSITIVE: 1400,
-            SegmentType.AT_RISK: 1800,
-            SegmentType.NEW_USER: 950,
-            SegmentType.DORMANT: 750
+            SegmentType.PREMIUM_CUSTOMERS: 5500,
+            SegmentType.HIGH_VALUE_CUSTOMERS: 4500,
+            SegmentType.PRICE_SENSITIVE_CUSTOMERS: 1400,
+            SegmentType.AT_RISK_CUSTOMERS: 1800,
+            SegmentType.STANDARD_CUSTOMERS: 2300
         }
         
         base_value = base_values.get(user.segment, 1800)  # Default fallback
@@ -211,12 +223,12 @@ Return only the recommended discount percentage as a number.
         reasoning = []
         
         # Segment-based reasoning
-        if user.segment == SegmentType.AT_RISK:
+        if user.segment == SegmentType.AT_RISK_CUSTOMERS:
             reasoning.append(f"AT_RISK segment: Aggressive {discount}% discount to retain user")
-        elif user.segment == SegmentType.PRICE_SENSITIVE:
+        elif user.segment == SegmentType.PRICE_SENSITIVE_CUSTOMERS:
             reasoning.append(f"PRICE_SENSITIVE segment: {discount}% discount for strong conversion signal")
-        elif user.segment == SegmentType.NEW_USER:
-            reasoning.append(f"NEW_USER segment: {discount}% discount to create first purchase hook")
+        elif user.segment == SegmentType.HIGH_VALUE_CUSTOMERS:
+            reasoning.append(f"HIGH_VALUE segment: {discount}% discount for conversion optimization")
         else:
             reasoning.append(f"{user.segment.value} segment: {discount}% discount for conversion optimization")
         

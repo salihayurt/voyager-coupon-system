@@ -5,14 +5,17 @@ class RewardCalculator:
     
     def __init__(self, 
                  profit_weight: float = 0.6,
-                 conversion_weight: float = 0.4):
+                 conversion_weight: float = 0.4,
+                 family_booking_multiplier: float = 1.2):
         """
         Args:
             profit_weight: Kar'ın ağırlığı
             conversion_weight: Conversion'ın ağırlığı
+            family_booking_multiplier: Family booking'ler için kar çarpanı
         """
         self.profit_weight = profit_weight
         self.conversion_weight = conversion_weight
+        self.family_booking_multiplier = family_booking_multiplier
     
     def calculate(self, 
                   user: User,
@@ -35,10 +38,15 @@ class RewardCalculator:
         # Conversion component
         conversion_reward = 1.0 if converted else 0.0
         
-        # Profit component
+        # Profit component with family booking adjustment
         # Max profit: İndirim verilmeseydi elde edilecek kar
         # Basitleştirilmiş formül (gerçekte average_order_value kullanılmalı)
         estimated_order_value = 2000  # TL (örnek)
+        
+        # Family booking adjustment: family buyers typically spend more
+        if user.scores.family_score < 0.4:  # Family buyer
+            estimated_order_value *= self.family_booking_multiplier
+        
         max_possible_profit = estimated_order_value * 0.2  # %20 kar marjı
         
         if max_possible_profit > 0:

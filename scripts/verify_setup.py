@@ -260,15 +260,16 @@ def test_basic_functionality():
             churn_score=0.5,
             activity_score=0.7,
             cart_abandon_score=0.3,
-            price_sensitivity=0.6
+            price_sensitivity=0.6,
+            family_score=0.4
         )
         
         user = User(
-            user_id="TEST_001",
+            user_id="TEST_12345",
             domain=DomainType.ENUYGUN_FLIGHT,
             is_oneway=True,
             user_basket=True,
-            segment=SegmentType.PRICE_SENSITIVE,
+            segment=SegmentType.PRICE_SENSITIVE_CUSTOMERS,
             scores=scores
         )
         print_success("User and UserScores creation")
@@ -289,7 +290,7 @@ def test_basic_functionality():
     try:
         from learning.state_encoder import StateEncoder
         encoder = StateEncoder()
-        print_success(f"StateEncoder - {encoder.state_space_size:,} total states")
+        print_success(f"StateEncoder - {encoder.state_space_size:,} total states (now includes family_score)")
         tests_passed += 1
     except Exception as e:
         print_error(f"StateEncoder test failed: {e}")

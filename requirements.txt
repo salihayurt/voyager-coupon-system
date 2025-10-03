@@ -1,11 +1,24 @@
-agno>=0.1.0
+# Core FastAPI dependencies
 fastapi==0.104.1
 uvicorn==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
-numpy==1.24.3
+
+# Data science and ML - Updated versions for Python 3.12 compatibility
+numpy==1.26.0
 pandas==2.1.0
 scikit-learn==1.3.0
-shap==0.43.0
+matplotlib>=3.7.0
+joblib>=1.3.0
+
+# Configuration and utilities
 pyyaml==6.0.1
 python-dotenv==1.0.0
+rich==13.6.0
+tqdm==4.66.1
+
+# Development (optional)
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0

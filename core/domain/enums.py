@@ -6,15 +6,15 @@ class DomainType(str, Enum):
     ENUYGUN_FLIGHT = "ENUYGUN_FLIGHT"
     ENUYGUN_CAR_RENTAL = "ENUYGUN_CAR_RENTAL"
     ENUYGUN_BUS = "ENUYGUN_BUS"
+    WINGIE_FLIGHT = "WINGIE_FLIGHT"
 
 class SegmentType(str, Enum):
     """Kullanıcı segmentleri (data analysis ekibinden gelecek)"""
-    HIGH_VALUE = "high_value"
-    AT_RISK = "at_risk"
-    PRICE_SENSITIVE = "price_sensitive"
-    FREQUENT_TRAVELER = "frequent_traveler"
-    NEW_USER = "new_user"
-    DORMANT = "dormant"
+    PREMIUM_CUSTOMERS = "premium_customers"
+    HIGH_VALUE_CUSTOMERS = "high_value_customers"
+    PRICE_SENSITIVE_CUSTOMERS = "price_sensitive_customers"
+    AT_RISK_CUSTOMERS = "at_risk_customers"
+    STANDARD_CUSTOMERS = "standard_customers"
 
 class ActionType(str, Enum):
     """Agent'ların alabileceği aksiyonlar"""

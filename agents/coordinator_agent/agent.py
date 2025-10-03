@@ -2,25 +2,22 @@ from typing import Dict, Any, List, Tuple, Optional
 import re
 from agents.shared.base_agent import BaseVoyagerAgent
 from agents.shared.context import SharedContext
+from core.domain.segment_constraints import get_allowed_discounts, SEGMENT_DISCOUNT_CONSTRAINTS
+from core.domain.enums import SegmentType
 from core.rules.business_rules import RuleResult
 
 class CoordinatorAgent(BaseVoyagerAgent):
     """Strategic decision coordinator that balances profit and conversion optimization"""
     
     def __init__(self, profit_weight: float = 0.6, conversion_weight: float = 0.4):
-        """
-        Initialize coordinator with configurable profit/conversion weights
-        
-        Args:
-            profit_weight: Weight for profit optimization (default 60%)
-            conversion_weight: Weight for conversion optimization (default 40%)
-        """
-        super().__init__(name="CoordinatorAgent", temperature=0.4)
-        
-        # Ensure weights sum to 1.0
+        # Önce ağırlıkları tanımla
         total_weight = profit_weight + conversion_weight
         self.profit_weight = profit_weight / total_weight
         self.conversion_weight = conversion_weight / total_weight
+
+        # Sonra base sınıfı initialize et
+        super().__init__(name="CoordinatorAgent", temperature=0.4)
+
     
     def _setup_instructions(self) -> str:
         """Setup strategic coordination instructions for the agent"""
@@ -51,36 +48,46 @@ class CoordinatorAgent(BaseVoyagerAgent):
         prof_proposal = context.profitability_proposal
         conv_proposal = context.conversion_proposal
         
-        # Fallback to Q-Learning if proposals are missing
+        # If proposals missing, choose conservative allowed
         if not prof_proposal or not conv_proposal:
-            return self._fallback_to_qlearning(context)
+            segment: SegmentType = context.segment_type or (context.user.segment if context.user else SegmentType.STANDARD_CUSTOMERS)
+            allowed = get_allowed_discounts(segment)
+            final_discount = min(allowed) if allowed else 10
+            return {
+                "discount": final_discount,
+                "reasoning": [
+                    f"Fallback: proposals missing; using lowest allowed for {segment.value}",
+                    f"Allowed range: {SEGMENT_DISCOUNT_CONSTRAINTS[segment][0]}-{SEGMENT_DISCOUNT_CONSTRAINTS[segment][1]}%",
+                ],
+                "confidence": 0.7,
+                "expected_conversion": 0.0,
+                "expected_profit": 0.0,
+            }
         
-        # Build coordination prompt
-        prompt = self._build_coordination_prompt(prof_proposal, conv_proposal, context)
+        # Non-LLM coordination under segment constraints
+        segment: SegmentType = context.segment_type or (context.user.segment if context.user else SegmentType.STANDARD_CUSTOMERS)
+        allowed = get_allowed_discounts(segment)
+        prof_disc = prof_proposal.get("discount", 10)
+        conv_disc = conv_proposal.get("discount", 12)
         
-        try:
-            # Get LLM coordination decision
-            response = self.agent.run(prompt)
-            
-            # Parse final discount from response
-            final_discount = self._parse_discount_response(response)
-            
-        except Exception as e:
-            # Fallback to weighted average
-            final_discount = self._calculate_weighted_average(
-                prof_proposal.get("discount", 10),
-                conv_proposal.get("discount", 12)
-            )
-            print(f"CoordinatorAgent error: {e}. Using weighted average: {final_discount}")
+        if prof_disc == conv_disc:
+            final_discount = prof_disc
+        elif conv_disc > prof_disc and (conv_disc - prof_disc) <= 3:
+            final_discount = conv_disc
+        else:
+            weighted = int(round(self.profit_weight * prof_disc + self.conversion_weight * conv_disc))
+            final_discount = min(allowed or [5,7,10,12,15,20], key=lambda x: abs(x - weighted))
         
         # Calculate final metrics
         expected_conversion, expected_profit = self._calculate_final_metrics(final_discount, context)
         
-        # Build comprehensive reasoning
-        reasoning = self._build_reasoning(
-            prof_proposal, conv_proposal, final_discount, 
-            context.q_learning_suggestion, context.business_rules
-        )
+        # Build reasoning
+        reasoning = [
+            f"Segment: {segment.value} (allowed: {SEGMENT_DISCOUNT_CONSTRAINTS[segment][0]}-{SEGMENT_DISCOUNT_CONSTRAINTS[segment][1]}%)",
+            f"Profitability suggested: {prof_disc}%",
+            f"Conversion suggested: {conv_disc}%",
+            f"Final decision: {final_discount}% (balanced)",
+        ]
         
         # Calculate confidence based on agent agreement and Q-Learning alignment
         confidence = self._calculate_coordination_confidence(
@@ -94,6 +101,79 @@ class CoordinatorAgent(BaseVoyagerAgent):
             "expected_conversion": expected_conversion,
             "expected_profit": expected_profit
         }
+
+    def generate_multiple_options(self, context: SharedContext) -> list:
+        """Generate 3-5 discount options with confidence and strategy labels."""
+        # Determine segment and allowed discounts
+        segment: SegmentType = context.segment_type or (context.user.segment if context.user else SegmentType.STANDARD_CUSTOMERS)
+        allowed = get_allowed_discounts(segment)
+        if not allowed:
+            return []
+
+        prof = context.profitability_proposal or {"discount": min(allowed)}
+        conv = context.conversion_proposal or {"discount": max(allowed), "expected_conversion": 0.8}
+
+        options = []
+
+        # Conservative
+        conservative = min(allowed)
+        options.append({
+            "discount": conservative,
+            "confidence": 0.5,
+            "strategy": "profit_maximization",
+            "reasoning": f"Minimum discount in {segment.value} range - maximizes profit"
+        })
+
+        # Balanced (profit agent)
+        balanced = prof.get("discount", conservative)
+        # If balanced equals conservative and higher options exist, bump to next allowed
+        if balanced == conservative:
+            higher = [d for d in allowed if d > conservative]
+            if higher:
+                balanced = min(higher)
+        options.append({
+            "discount": balanced,
+            "confidence": 0.75,
+            "strategy": "balanced",
+            "reasoning": "Profitability agent recommendation - good profit/conversion balance"
+        })
+
+        # Conversion-focused
+        aggressive = conv.get("discount", balanced)
+        # Ensure aggressive differs; if duplicate, bump towards max
+        if aggressive in {conservative, balanced}:
+            higher = [d for d in allowed if d > max(conservative, balanced)]
+            if higher:
+                aggressive = min(higher)
+        confidence = float(conv.get("expected_conversion", 0.8))
+        options.append({
+            "discount": aggressive,
+            "confidence": max(0.5, min(0.95, confidence)),
+            "strategy": "conversion_maximization",
+            "reasoning": f"Conversion agent recommendation - {confidence:.0%} expected acceptance"
+        })
+
+        # Maximum, if meaningfully higher
+        max_disc = max(allowed)
+        if max_disc > aggressive + 2:
+            options.append({
+                "discount": max_disc,
+                "confidence": 0.9,
+                "strategy": "aggressive_conversion",
+                "reasoning": "Maximum allowed discount - highest conversion probability"
+            })
+
+        # Ensure options stay within allowed and deduplicate by discount (keep highest confidence)
+        filtered = [opt for opt in options if opt["discount"] in allowed]
+        unique_by_discount = {}
+        for opt in filtered:
+            disc = opt["discount"]
+            prev = unique_by_discount.get(disc)
+            if not prev or opt["confidence"] > prev["confidence"]:
+                unique_by_discount[disc] = opt
+        result = list(unique_by_discount.values())
+        result.sort(key=lambda x: x["discount"])
+        return result
     
     def merge_proposals(self, prof_proposal: Dict, conv_proposal: Dict, context: SharedContext) -> Dict:
         """

@@ -8,6 +8,7 @@ class UserScores(BaseModel):
     activity_score: float = Field(ge=0, le=1, description="Aktivite skoru")
     cart_abandon_score: float = Field(ge=0, le=1, description="Sepet terk etme skoru")
     price_sensitivity: float = Field(ge=0, le=1, description="Fiyat duyarlılığı skoru")
+    family_score: float = Field(ge=0, le=1, description="Single purchases / Family purchases ratio (0=family buyer, 1=solo buyer)")
 
 class User(BaseModel):
     """Kullanıcı modeli - agent'lara input olarak verilir"""
@@ -33,12 +34,13 @@ class User(BaseModel):
                 "domain": "ENUYGUN_FLIGHT",
                 "is_oneway": 1,
                 "user_basket": 1,
-                "segment": "price_sensitive",
+                "segment": "price_sensitive_customers",
                 "scores": {
                     "churn_score": 0.35,
                     "activity_score": 0.68,
                     "cart_abandon_score": 0.22,
-                    "price_sensitivity": 0.72
+                    "price_sensitivity": 0.72,
+                    "family_score": 0.33
                 },
                 "previous_domains": ["ENUYGUN_FLIGHT"]
             }

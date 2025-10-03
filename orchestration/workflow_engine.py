@@ -1,15 +1,12 @@
-from typing import List
+from typing import List, Dict
+from collections import Counter, defaultdict
 from tqdm import tqdm
-
-# Learning components
-from learning.q_table import QTable
-from learning.state_encoder import StateEncoder
 
 # Core components
 from core.rules.business_rules import RulesEngine, RuleResult
 from core.domain.user import User
 from core.domain.coupon import CouponDecision
-from core.domain.enums import ActionType, DomainType
+from core.domain.enums import ActionType, DomainType, SegmentType
 
 # Agents
 from agents.profitability_agent.agent import ProfitabilityAgent
@@ -21,8 +18,6 @@ class WorkflowEngine:
     """Orchestrates the entire agent pipeline for coupon decision making"""
     
     def __init__(self,
-                 q_table: QTable,
-                 state_encoder: StateEncoder,
                  rules_engine: RulesEngine,
                  profitability_agent: ProfitabilityAgent,
                  conversion_agent: ConversionAgent,
@@ -31,15 +26,11 @@ class WorkflowEngine:
         Initialize workflow engine with all components
         
         Args:
-            q_table: Q-Learning table for historical recommendations
-            state_encoder: Converts users to Q-Learning states
             rules_engine: Business rules engine
             profitability_agent: Profit optimization agent
             conversion_agent: Conversion optimization agent
             coordinator_agent: Strategic coordination agent
         """
-        self.q_table = q_table
-        self.state_encoder = state_encoder
         self.rules_engine = rules_engine
         self.profitability_agent = profitability_agent
         self.conversion_agent = conversion_agent
@@ -58,42 +49,163 @@ class WorkflowEngine:
         # Step 1: Apply business rules
         business_rules = self.rules_engine.apply_rules(user)
         
-        # Step 2: Encode state and get Q-Learning suggestion
-        state = self.state_encoder.encode(user)
-        q_suggestion_action = self.q_table.get_best_action(state)
-        q_suggestion = ActionSpace.get_discount_percentage(q_suggestion_action)
-        q_value = self.q_table.get_q_value(state, q_suggestion_action)
+        # Segment-based context
+        context = SharedContext(
+            user=None,
+            business_rules=business_rules,
+            segment_type=user.segment,
+            user_count=None,
+        )
+
+        # Agents
+        prof_proposal = self.profitability_agent.make_proposal(context)
+        context.add_agent_proposal("ProfitabilityAgent", prof_proposal)
+        conv_proposal = self.conversion_agent.make_proposal(context)
+        context.add_agent_proposal("ConversionAgent", conv_proposal)
+
+        # Coordination
+        final_decision = self.coordinator_agent.merge_proposals(prof_proposal, conv_proposal, context)
+
+        # Coupon decision
+        return self._create_coupon_decision(user, final_decision, business_rules)
+    
+    def process_user_with_details(self, user: User) -> dict:
+        """
+        Process user and return detailed analysis including all intermediate results
         
-        # Step 3: Create SharedContext
+        Returns:
+            dict: Detailed processing results including state, q-learning, agent proposals, etc.
+        """
+        # Apply business rules
+        business_rules = self.rules_engine.apply_rules(user)
+
+        # Segment-based context
+        context = SharedContext(
+            user=None,
+            business_rules=business_rules,
+            segment_type=user.segment,
+            user_count=None,
+        )
+
+        prof_proposal = self.profitability_agent.make_proposal(context)
+        context.add_agent_proposal("profitability", prof_proposal)
+        conv_proposal = self.conversion_agent.make_proposal(context)
+        context.add_agent_proposal("conversion", conv_proposal)
+        final_decision = self.coordinator_agent.merge_proposals(prof_proposal, conv_proposal, context)
+
+        return {
+            "user": user.dict(),
+            "business_rules": [
+                {
+                    "applies": rule.applies,
+                    "message": rule.message,
+                    "action_type": rule.action_type.value if rule.action_type else None,
+                    "discount_boost": rule.discount_boost,
+                }
+                for rule in business_rules
+            ],
+            "agent_proposals": {
+                "profitability": prof_proposal,
+                "conversion": conv_proposal,
+                "coordination": final_decision,
+            },
+        }
+
+    def process_single_user_with_options(self, user: User) -> dict:
+        """Process one user and return multiple discount options."""
+        rules = self.rules_engine.apply_rules(user)
         context = SharedContext(
             user=user,
-            business_rules=business_rules,
-            q_learning_suggestion=q_suggestion,
-            q_value=q_value
+            business_rules=rules,
+            segment_type=user.segment,
+            processing_mode="single_user"
         )
-        
-        # Step 4: Run ProfitabilityAgent
-        prof_proposal = self.profitability_agent.make_proposal(context)
-        
-        # Step 5: Add profitability proposal to context
-        context.add_agent_proposal("ProfitabilityAgent", prof_proposal)
-        
-        # Step 6: Run ConversionAgent
-        conv_proposal = self.conversion_agent.make_proposal(context)
-        
-        # Step 7: Add conversion proposal to context
-        context.add_agent_proposal("ConversionAgent", conv_proposal)
-        
-        # Step 8: Run CoordinatorAgent to merge proposals
-        final_decision = self.coordinator_agent.merge_proposals(
-            prof_proposal, conv_proposal, context
-        )
-        
-        # Step 9: Create CouponDecision object
-        coupon_decision = self._create_coupon_decision(user, final_decision, business_rules)
-        
-        # Step 10: Return final decision
-        return coupon_decision
+        prof = self.profitability_agent.make_proposal(context)
+        context.profitability_proposal = prof
+        conv = self.conversion_agent.make_proposal(context)
+        context.conversion_proposal = conv
+        options = self.coordinator_agent.generate_multiple_options(context)
+
+        return {
+            'user_id': user.user_id,
+            'segment': user.segment.value,
+            'domain': user.domain.value,
+            'business_rules_applied': [r.message for r in rules if r.applies],
+            'discount_options': options,
+        }
+
+    def process_segment_recommendation(self,
+                                       segment: SegmentType,
+                                       domain: DomainType | None = None,
+                                       user_sample_size: int = 100,
+                                       data_client=None) -> dict:
+        """
+        Generate segment-level recommendation (strategic decision).
+        """
+        if data_client is None:
+            raise ValueError("data_client is required for segment processing")
+
+        all_users = data_client.load_users()
+        seg_users = [u for u in all_users if u.segment == segment]
+        if domain:
+            seg_users = [u for u in seg_users if u.domain == domain]
+
+        import random
+        sample = random.sample(seg_users, min(user_sample_size, len(seg_users)))
+
+        discount_votes: list[int] = []
+        for u in sample:
+            res = self.process_single_user_with_options(u)
+            balanced = [opt for opt in res['discount_options'] if opt['strategy'] == 'balanced']
+            if balanced:
+                discount_votes.append(balanced[0]['discount'])
+
+        from collections import Counter
+        most_common = Counter(discount_votes).most_common(1)[0] if discount_votes else (10, 1)
+        recommended_discount = most_common[0]
+        frequency = most_common[1] / max(1, len(discount_votes))
+
+        # Acceptance via ConversionAgent's campaign client if available
+        acceptance_rate = 0.0
+        try:
+            from adapters.external.campaign_data_client import CampaignDataClient
+            client = CampaignDataClient()
+            client.load_campaign_history("data/customer_data_with_campaigns_v3.csv")
+            acceptance_rate = client.get_acceptance_rate_by_segment(segment, recommended_discount)
+        except Exception:
+            pass
+
+        total_segment_size = len(seg_users)
+        estimated_conversions = int(total_segment_size * acceptance_rate)
+        avg_order_value = self._estimate_avg_order_value(segment)
+        estimated_revenue = estimated_conversions * avg_order_value * (1 - recommended_discount/100)
+
+        from core.domain.segment_constraints import get_allowed_discounts
+        return {
+            'segment': segment.value,
+            'domain': domain.value if domain else 'ALL',
+            'recommended_discount': recommended_discount,
+            'recommendation_confidence': round(frequency, 3),
+            'reasoning': f"{frequency:.0%} of sampled users optimal at {recommended_discount}%",
+            'expected_impact': {
+                'total_segment_users': total_segment_size,
+                'expected_conversion_rate': round(acceptance_rate, 3),
+                'estimated_conversions': estimated_conversions,
+                'estimated_revenue': round(estimated_revenue, 2),
+                'avg_order_value': avg_order_value
+            },
+            'allowed_discount_range': get_allowed_discounts(segment)
+        }
+
+    def _estimate_avg_order_value(self, segment: SegmentType) -> float:
+        avg_values = {
+            SegmentType.PREMIUM_CUSTOMERS: 5000,
+            SegmentType.HIGH_VALUE_CUSTOMERS: 3500,
+            SegmentType.AT_RISK_CUSTOMERS: 2000,
+            SegmentType.PRICE_SENSITIVE_CUSTOMERS: 1500,
+            SegmentType.STANDARD_CUSTOMERS: 2000
+        }
+        return avg_values.get(segment, 2000.0)
     
     def process_batch(self, users: List[User]) -> List[CouponDecision]:
         """
@@ -119,6 +231,68 @@ class WorkflowEngine:
                 decisions.append(fallback_decision)
         
         return decisions
+
+    def process_segment_batch(self, users: List[User]) -> Dict[str, dict]:
+        """
+        Process users grouped by segment and return segment-level recommendations and per-user results.
+        """
+        # Group users by segment
+        segment_to_users: Dict = defaultdict(list)
+        for user in users:
+            segment_to_users[user.segment].append(user)
+
+        recommendations: Dict[str, dict] = {}
+
+        for segment, seg_users in segment_to_users.items():
+            segment_decisions: List[dict] = []
+
+            for user in seg_users:
+                rules = self.rules_engine.apply_rules(user)
+
+                # Create segment-focused context
+                context = SharedContext(
+                    user=None,  # segment mode does not require full user for agents
+                    business_rules=rules,
+                    segment_type=segment,
+                    user_count=len(seg_users)
+                )
+
+                prof_prop = self.profitability_agent.make_proposal(context)
+                context.profitability_proposal = prof_prop
+
+                conv_prop = self.conversion_agent.make_proposal(context)
+                context.conversion_proposal = conv_prop
+
+                final = self.coordinator_agent.merge_proposals(prof_prop, conv_prop, context)
+
+                segment_decisions.append({
+                    'user_id': user.user_id,
+                    'discount': final['discount'],
+                    'reasoning': final.get('reasoning', [])
+                })
+
+            recommendations[segment.value] = {
+                'user_count': len(seg_users),
+                'coupon_options': self._aggregate_options(segment_decisions),
+                'users': segment_decisions,
+            }
+
+        return recommendations
+
+    def _aggregate_options(self, decisions: List[dict]) -> List[dict]:
+        """Aggregate discount options with counts and percentages for a segment."""
+        if not decisions:
+            return []
+        counts = Counter([d['discount'] for d in decisions])
+        total = len(decisions)
+        return [
+            {
+                'discount': disc,
+                'user_count': cnt,
+                'percentage': f"{(cnt/total)*100:.1f}%",
+            }
+            for disc, cnt in counts.most_common()
+        ]
     
     def _create_coupon_decision(self, user: User, decision: dict, business_rules: List[RuleResult]) -> CouponDecision:
         """
@@ -195,7 +369,6 @@ class WorkflowEngine:
         
         # Add system-level reasoning
         reasoning.append(f"Multi-agent coordination: Profit vs Conversion optimization")
-        reasoning.append(f"Q-Learning integration: Historical data-backed suggestions")
         
         return reasoning
     
@@ -218,10 +391,8 @@ class WorkflowEngine:
         )
     
     def get_pipeline_stats(self) -> dict:
-        """Get statistics about the pipeline components"""
+        """Get statistics about the pipeline components (segment-based)."""
         return {
-            "q_table_stats": self.q_table.get_statistics(),
-            "state_space_size": self.state_encoder.state_space_size,
             "rules_count": len(self.rules_engine.rules),
             "agents": {
                 "profitability": str(self.profitability_agent),
@@ -243,19 +414,12 @@ class WorkflowEngine:
         # Step 1: Business rules
         business_rules = self.rules_engine.apply_rules(user)
         
-        # Step 2: Q-Learning
-        state = self.state_encoder.encode(user)
-        state_readable = self.state_encoder.decode_readable(state)
-        q_suggestion_action = self.q_table.get_best_action(state)
-        q_suggestion = ActionSpace.get_discount_percentage(q_suggestion_action)
-        q_value = self.q_table.get_q_value(state, q_suggestion_action)
-        
-        # Step 3: Context creation
+        # Segment context and proposals
         context = SharedContext(
-            user=user,
+            user=None,
             business_rules=business_rules,
-            q_learning_suggestion=q_suggestion,
-            q_value=q_value
+            segment_type=user.segment,
+            user_count=None
         )
         
         # Step 4 & 5: Profitability agent
@@ -276,25 +440,14 @@ class WorkflowEngine:
         
         # Return detailed information
         return {
-            "user": user,
-            "state": {
-                "encoded": state,
-                "readable": state_readable,
-                "visits": self.q_table.state_visits.get(state, 0)
-            },
-            "business_rules": business_rules,
-            "q_learning": {
-                "suggestion": q_suggestion,
-                "q_value": q_value,
-                "action": q_suggestion_action
-            },
+            "user": user.dict(),
+            "business_rules": [br.__dict__ for br in business_rules],
             "agent_proposals": {
                 "profitability": prof_proposal,
                 "conversion": conv_proposal,
                 "coordination": final_decision
             },
-            "final_decision": coupon_decision
+            "final_decision": coupon_decision.dict(),
         }
 
-# Import ActionSpace for Q-Learning integration
-from learning.action_space import ActionSpace
+

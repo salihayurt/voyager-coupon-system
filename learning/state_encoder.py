@@ -20,27 +20,29 @@ class StateEncoder:
     def _calculate_state_space(self) -> int:
         """Total state kombinasyonlarını hesapla"""
         return (
-            len(SegmentType) *      # 6 segment
+            len(SegmentType) *      # 5 segment
             self.SCORE_BUCKETS *    # 3 churn bucket
             self.SCORE_BUCKETS *    # 3 activity bucket
             self.SCORE_BUCKETS *    # 3 cart abandon bucket
             self.SCORE_BUCKETS *    # 3 price sensitivity bucket
-            len(DomainType) *       # 4 domain
+            self.SCORE_BUCKETS *    # 3 family score bucket
+            len(DomainType) *       # 5 domain (now includes WINGIE_FLIGHT)
             2 *                     # is_oneway (0/1)
             2                       # user_basket (0/1)
         )
     
     def encode(self, user: User) -> Tuple[int, ...]:
-        """User → State tuple"""
+        """User → State tuple (now 9 elements including family_score)"""
         return (
             self.segment_to_idx[user.segment],
             self._discretize_score(user.scores.churn_score),
             self._discretize_score(user.scores.activity_score),
             self._discretize_score(user.scores.cart_abandon_score),
             self._discretize_score(user.scores.price_sensitivity),
+            self._discretize_score(user.scores.family_score),
             self.domain_to_idx[user.domain],
-            int(user.is_oneway),
-            int(user.user_basket)
+            int(user.is_oneway),  # Convert bool to int
+            int(user.user_basket)  # Convert bool to int
         )
     
     def _discretize_score(self, score: float) -> int:
@@ -69,7 +71,8 @@ class StateEncoder:
             "activity": score_labels[state[2]],
             "cart_abandon": score_labels[state[3]],
             "price_sensitivity": score_labels[state[4]],
-            "domain": domain_names[state[5]].value,
-            "is_oneway": bool(state[6]),
-            "user_basket": bool(state[7])
+            "family_pattern": score_labels[state[5]],
+            "domain": domain_names[state[6]].value,
+            "is_oneway": bool(state[7]),
+            "user_basket": bool(state[8])
         }
