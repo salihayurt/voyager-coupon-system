@@ -1,0 +1,18 @@
+profitability_agent:
+  name: "ProfitabilityAgent"
+  model: "claude-sonnet-4-5-20250929"
+  temperature: 0.3
+  focus: "profit_maximization"
+
+conversion_agent:
+  name: "ConversionAgent"
+  model: "claude-sonnet-4-5-20250929"
+  temperature: 0.5
+  focus: "conversion_optimization"
+
+coordinator_agent:
+  name: "CoordinatorAgent"
+  model: "claude-sonnet-4-5-20250929"
+  temperature: 0.4
+  profit_weight: 0.6
+  conversion_weight: 0.4

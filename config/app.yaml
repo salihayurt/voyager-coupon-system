@@ -1,0 +1,22 @@
+app:
+  name: "Voyager Coupon System"
+  version: "1.0.0"
+  debug: true
+  environment: "development"
+
+api:
+  host: "localhost"
+  port: 8000
+  cors_origins: ["*"]
+
+database:
+  url: "sqlite:///./voyager_coupon.db"
+  echo: true
+  
+agents:
+  max_concurrent: 3
+  timeout: 30
+  
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
