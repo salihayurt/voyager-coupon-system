@@ -4,6 +4,9 @@ from typing import Optional, Dict, Any, List
 import logging
 from contextlib import asynccontextmanager
 
+# Import policy router
+from routers.policy import router as policy_router
+
 # Import all system components
 from adapters.external.data_analysis_client import DataAnalysisClient
 from orchestration.workflow_engine import WorkflowEngine
@@ -122,6 +125,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Include policy router
+app.include_router(policy_router)
 
 @app.get("/health")
 async def health_check():

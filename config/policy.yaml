@@ -1,0 +1,153 @@
+# Policy Tree Cohorting Configuration
+# Configuration for the Policy Tree module
+
+# Segment constraints and allowed actions
+segments:
+  at_risk_customers:
+    allowed_discounts: [10, 11, 12, 13]
+    premium_reward_eligible: false
+    
+  high_value_customers:
+    allowed_discounts: [5, 6, 7, 8]
+    premium_reward_eligible: true
+    
+  standard_customers:
+    allowed_discounts: [5, 6, 7, 8, 9, 10]
+    premium_reward_eligible: false
+    
+  price_sensitive_customers:
+    allowed_discounts: [12, 13, 14, 15]
+    premium_reward_eligible: false
+    
+  premium_customers:
+    allowed_discounts: [5, 6, 7, 8]
+    premium_reward_eligible: true
+
+# Premium reward configuration
+premium_reward:
+  utility_uplift: 0.02  # Additional utility for premium reward eligibility
+  price_sensitivity_threshold: 0.4  # Max price sensitivity for eligibility
+  eligible_segments: ["high_value_customers", "premium_customers"]
+
+# Score binning thresholds for feature engineering
+score_bins:
+  churn_score: [0.3, 0.6, 0.8]
+  activity_score: [0.3, 0.7]
+  cart_abandon_score: [0.6, 0.8]
+  price_sensitivity: [0.4, 0.6]
+  family_score: [0.4, 0.6]
+
+# Policy tree hyperparameters
+tree_config:
+  max_depth: 4
+  min_leaf_fraction: 0.02  # 2% of samples minimum per leaf
+  min_support: 50  # Minimum users per cohort
+  class_weight: "balanced"
+  random_seed: 42
+
+# Tag extraction rules
+tag_rules:
+  high_price_sens:
+    score_threshold:
+      field: "price_sensitivity"
+      value: 0.6
+      operator: "ge"
+    keywords: ["price sensitive", "price-sensitive", "pricing", "cost conscious"]
+    
+  high_churn:
+    score_threshold:
+      field: "churn_score"
+      value: 0.7
+      operator: "ge"
+    keywords: ["churn", "risk", "leaving", "at risk", "retention"]
+    
+  cart_abandon:
+    score_threshold:
+      field: "cart_abandon_score"
+      value: 0.7
+      operator: "ge"
+    keywords: ["abandon", "cart abandon", "incomplete", "drop off"]
+    
+  loyal_high_value:
+    segments: ["high_value_customers", "premium_customers"]
+    keywords: ["loyal", "high value", "premium", "vip"]
+    
+  family_pattern:
+    score_threshold:
+      field: "family_score"
+      value: 0.4
+      operator: "le"
+    keywords: ["family", "group", "multiple", "children"]
+    
+  time_urgent:
+    keywords: ["last minute", "deadline", "urgent", "immediate", "soon", "expires"]
+    
+  low_activity:
+    score_threshold:
+      field: "activity_score"
+      value: 0.3
+      operator: "le"
+    keywords: ["inactive", "low activity", "dormant", "engagement"]
+    
+  cross_sell:
+    keywords: ["cross sell", "cross-sell", "additional", "hotel", "flight", "upsell"]
+
+# Training configuration
+training:
+  default_data_source: "data/structured_customer_data.csv"
+  test_size: 0.2
+  validation_split: 0.1
+  batch_size: 1000
+  save_path: "artifacts/"
+  model_retention_days: 30  # Keep models for 30 days
+  auto_retrain_threshold_days: 7  # Auto-retrain if model older than 7 days
+
+# API configuration
+api:
+  cache_ttl_seconds: 3600  # 1 hour cache TTL
+  max_cohorts_per_request: 1000
+  max_users_preview: 500
+  default_cohorts_limit: 100
+  
+# Performance thresholds
+performance:
+  max_cohort_generation_time_ms: 5000
+  max_api_response_time_ms: 300
+  min_cohort_size: 50
+  max_tree_depth: 6
+  
+# Logging configuration
+logging:
+  level: "INFO"
+  log_training: true
+  log_api_calls: true
+  log_cache_operations: false
+  
+# Feature engineering
+features:
+  categorical_features: ["segment", "domain"]
+  score_features: ["churn_score", "activity_score", "cart_abandon_score", "price_sensitivity", "family_score"]
+  binary_features: ["is_oneway", "user_basket"]
+  tag_prefix: "tag_"
+  one_hot_prefix_separator: "_"
+  
+# Cohort validation
+validation:
+  require_positive_profit: true
+  require_legal_actions: true
+  min_confidence_score: 0.1
+  max_violation_rate: 0.05  # 5% maximum violation rate allowed
+  
+# Budget and selection (optional)
+budget:
+  enabled: false
+  max_total_budget: 1000000  # Maximum total budget for campaigns
+  max_cohorts_selected: 20  # Maximum cohorts to select for campaigns
+  selection_strategy: "greedy"  # "greedy" or "knapsack"
+  
+# Monitoring and alerts
+monitoring:
+  track_model_drift: true
+  alert_on_validation_failures: true
+  alert_on_low_performance: true
+  performance_threshold: 0.8  # Alert if accuracy drops below 80%
