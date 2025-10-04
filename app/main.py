@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import logging
 from contextlib import asynccontextmanager
+import time
 
 # Import all system components
 from adapters.external.data_analysis_client import DataAnalysisClient
@@ -15,6 +17,8 @@ from agents.profitability_agent.agent import ProfitabilityAgent
 from agents.conversion_agent.agent import ConversionAgent
 from agents.coordinator_agent.agent import CoordinatorAgent
 from core.domain.enums import SegmentType, DomainType
+from adapters.api.routes import notification_routes
+from wegathon_logger import WegathonLogger
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -122,6 +126,58 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# CORS (frontend bağlantıları için)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Vite default port
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include notifications router
+app.include_router(notification_routes.router, prefix="/api/notifications", tags=["notifications"])
+
+# Global Wegathon logger (WEGathon OpenSearch ingest)
+weg_logger = WegathonLogger(
+    team="nomados",
+    default_user="api",
+    extra_context={"app": "voyager-backend", "env": "dev"},
+)
+
+# HTTP request logging middleware (endpoint, method, status_code, response_time)
+@app.middleware("http")
+async def api_logging_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    except Exception as exc:
+        status = 500
+        weg_logger.log_error(user="api", action="request_unhandled_exception", exception=exc)
+        raise
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000.0
+        weg_logger.log_api_request(
+            user="api",
+            endpoint=request.url.path,
+            method=request.method,
+            status_code=status,
+            response_time_ms=duration_ms,
+            message="request completed",
+            client=str(request.client.host) if request.client else None,
+        )
+    return response
+
+# On shutdown, flush remaining logs
+@app.on_event("shutdown")
+async def shutdown_logging():
+    try:
+        weg_logger.flush()
+        weg_logger.close()
+    except Exception:
+        pass
 
 @app.get("/health")
 async def health_check():

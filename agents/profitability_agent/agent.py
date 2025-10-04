@@ -31,27 +31,43 @@ class ProfitabilityAgent(BaseVoyagerAgent):
         return "\n".join(instructions)
     
     def make_proposal(self, context: SharedContext) -> Dict[str, Any]:
-        """Segment-constraint based profit proposal (no LLM)."""
-        # Determine segment
+        """Profit proposal. Uses LLM if enabled and full user is present; otherwise constraint-based."""
         segment: SegmentType = context.segment_type or (context.user.segment if context.user else SegmentType.STANDARD_CUSTOMERS)
         allowed = get_allowed_discounts(segment)
         chosen = min(allowed) if allowed else 10
+        used_llm = False
+
+        # If LLM agent is available and we have a full user profile, prefer LLM guidance
+        if getattr(self, 'agent', None) is not None and context.user is not None:
+            try:
+                prompt = self._build_analysis_prompt(context.user, context)
+                response = self.agent.run(prompt)
+                response_text = str(response.content) if hasattr(response, 'content') else str(response)
+                llm_disc = self._parse_discount_response(response_text)
+                if allowed:
+                    # Clamp to nearest allowed
+                    chosen = min(allowed, key=lambda x: abs(x - llm_disc))
+                else:
+                    chosen = llm_disc
+                used_llm = True
+            except Exception as e:
+                # Fall back silently to constraint-based
+                pass
 
         reasoning = [
-            f"Selected lowest viable discount within {segment.value} constraints",
+            (f"LLM-guided: selected {chosen}% based on profit-focused analysis" if used_llm else
+             f"Selected lowest viable discount within {segment.value} constraints"),
             f"Allowed range: {SEGMENT_DISCOUNT_CONSTRAINTS[segment][0]}-{SEGMENT_DISCOUNT_CONSTRAINTS[segment][1]}%",
         ]
 
-        # Estimate profit if user provided; else generic
+        expected_profit = 0.0
         if context.user:
             expected_profit = self._estimate_profit(context.user, chosen)
-        else:
-            expected_profit = 0.0
 
         return {
             "discount": chosen,
             "reasoning": reasoning,
-            "confidence": 0.85,
+            "confidence": 0.85 if not used_llm else 0.9,
             "expected_conversion": 0.0,
             "expected_profit": expected_profit,
         }

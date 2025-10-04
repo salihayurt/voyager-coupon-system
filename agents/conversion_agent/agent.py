@@ -39,7 +39,7 @@ class ConversionAgent(BaseVoyagerAgent):
         return "\n".join(instructions)
     
     def make_proposal(self, context: SharedContext) -> Dict[str, Any]:
-        """Conversion decision using historical acceptance rates per segment (no LLM)."""
+        """Conversion decision. Uses LLM if enabled and full user is present; otherwise data-driven."""
         segment: SegmentType = context.segment_type or (context.user.segment if context.user else SegmentType.STANDARD_CUSTOMERS)
         allowed = get_allowed_discounts(segment)
         if not allowed:
@@ -54,9 +54,27 @@ class ConversionAgent(BaseVoyagerAgent):
                 candidates = [d for d in allowed if abs(d - prof_disc) <= 2] or allowed
             else:
                 candidates = allowed
-            # If acceptance ties (often 0.0 when no data), prefer higher discount for conversion focus
-            chosen = max(candidates, key=lambda d: (acceptance_map.get(d, 0.0), d))
-            acceptance = acceptance_map.get(chosen, 0.0)
+            # Default data-driven choice (tie -> higher discount)
+            data_choice = max(candidates, key=lambda d: (acceptance_map.get(d, 0.0), d))
+            acceptance = acceptance_map.get(data_choice, 0.0)
+
+            # If LLM available and full user present, get LLM suggestion and reconcile
+            if getattr(self, 'agent', None) is not None and context.user is not None:
+                try:
+                    prompt = self._build_analysis_prompt(context.user, context)
+                    response = self.agent.run(prompt)
+                    response_text = str(response.content) if hasattr(response, 'content') else str(response)
+                    llm_disc = self._parse_discount_response(response_text)
+                    # Clamp to nearest allowed
+                    llm_choice = min(allowed, key=lambda x: abs(x - llm_disc))
+                    # Prefer higher of (data_choice vs llm_choice) by predicted acceptance, tie -> higher
+                    pair = [data_choice, llm_choice]
+                    chosen = max(pair, key=lambda d: (acceptance_map.get(d, 0.0), d))
+                    acceptance = acceptance_map.get(chosen, acceptance)
+                except Exception:
+                    chosen = data_choice
+            else:
+                chosen = data_choice
 
         reasoning = [
             f"Selected {chosen}% based on highest acceptance in {segment.value}",
